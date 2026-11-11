@@ -197,6 +197,7 @@ const RE_STOP = /^(終了|しゅうりょう|ストップ|止めて|とめて|�
 const RE_CLEAR = /^(消して|けして|消去|クリア|空欄|なしにして)$/;
 
 function handle(alts){
+  if(S.view === "free") return freeHandle(alts);
   const raw = alts[0] || "", n = norm(raw);
   S.heard = raw;
   if(!n){ listen(); return; }
@@ -319,7 +320,7 @@ document.addEventListener("visibilitychange", () => {
 /* ========== 画面 ========== */
 $("#back").onclick = () => { S.active = false; stopRec(); try{ speechSynthesis.cancel(); }catch(e){} go("home"); };
 function go(v){ S.view = v; render(); scrollTo(0,0); }
-function render(){ $("#back").style.display = S.view === "home" ? "none" : ""; ({home: vHome, run: vRun, records: vRecords})[S.view](); }
+function render(){ $("#back").style.display = S.view === "home" ? "none" : ""; ({home: vHome, run: vRun, free: vFree, records: vRecords})[S.view](); }
 
 function vHome(){
   $("#title").textContent = "話して記録 ハンズフリー";
@@ -328,12 +329,22 @@ function vHome(){
     ${ok ? "" : `<div class="warn">このブラウザでは音声の聞き取り・読み上げが使えません。AndroidのChromeで開いてください。</div>`}
     <div class="card">
       <b>帳票を選ぶ</b>
-      <select id="tp" style="margin-top:8px">${Object.values(TPL).map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("")}</select>
+      <select id="tp" style="margin-top:8px"><option value="free">自由入力（決まった用紙なし）</option>${Object.values(TPL).map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("")}</select>
       <button class="btn pri big" id="start" style="margin-top:10px">▶ 開始（読み上げて聞き取ります）</button>
       <div class="muted" style="margin-top:6px">途中で閉じても、入れた内容は残っていて続きから始まります。</div>
     </div>
     <div class="card help">
-      <b>使い方</b><br>
+      <b>自由入力の使い方</b><br>
+      決まった項目はありません。話した順に1行ずつ記録します。<br>
+      <code>現場名 〇〇発電所</code> … 現場名を入れる<br>
+      <code>パワコン1 絶縁 200メガ</code> … 「パワコン1／絶縁／200 MΩ」の行ができます<br>
+      <code>パワコン2 210</code> … 項目を言わなければ、前と同じ「絶縁」で記録します<br>
+      <code>パワコン1 200 パワコン2 210 パワコン3 205</code> … まとめて言ってもOK<br>
+      <code>DC3 8.1アンペア</code> … 今のパワコンの中のDC3として記録します<br>
+      <code>パネル割れあり</code> … 数字がない言葉は、メモの行として残します<br>
+      <code>戻る</code> … 最後の行を消します　<code>もう一度</code> … 最後の行を読み上げます<br>
+      <code>保存</code> … 保存して、次の現場を始めます<br><br>
+      <b>決まった用紙（PPP点検用紙）の使い方</b><br>
       アプリが「<b>PCS 1 DC 1 電流</b>」のように項目名を読み上げます。続けて値を話してください。<br>
       <code>8.1</code> … その項目に入って、「8.1アンペア」と読み返します<br>
       <code>次へ</code> … 次の項目へ進みます（<code>8.1 次へ</code> と続けて言ってもOK）<br>
@@ -362,6 +373,7 @@ function vHome(){
   $("#rb").onchange = e => { S.opt.readBack = e.target.checked; ls.set("opt", S.opt); };
   $("#recs").onclick = () => go("records");
   $("#start").onclick = () => {
+    if($("#tp").value === "free") return startFree();
     S.tpl = TPL[$("#tp").value];
     const d = ls.get("draft_" + S.tpl.id, null);
     S.values = d ? d.values : fresh(); S.cur = d ? Math.min(d.cur, askable().length - 1) : 0;
@@ -389,6 +401,7 @@ function vRun(){
   draw(true);
 }
 function draw(full){
+  if(S.view === "free") return drawFree(full);
   if(S.view !== "run" || !$("#now")) return;
   const list = askable(), f = list[S.cur]; if(!f) return;
   const v = S.values[f.id];
@@ -417,10 +430,10 @@ function vRecords(){
   $("#title").textContent = "記録一覧";
   const recs = ls.get("records", []).slice().reverse();
   $("#app").innerHTML = `
-    <div class="row" style="margin-bottom:10px"><button class="btn pri" id="csvgs">CSV：GSユアサ用</button><button class="btn pri" id="csvzte">CSV：ZTE他用</button></div>
-    <div class="card">${recs.length ? recs.map((r, i) => `<div class="rec"><b>${esc(r.values.site || "（現場名なし）")}</b>　<span class="muted">${fmt(r.created)}　${r.tpl === "gs" ? "GSユアサ用" : "ZTE他用"}</span>
+    <div class="row" style="margin-bottom:10px"><button class="btn pri" id="csvfree">CSV：自由入力</button><button class="btn pri" id="csvgs">CSV：GSユアサ用</button><button class="btn pri" id="csvzte">CSV：ZTE他用</button></div>
+    <div class="card">${recs.length ? recs.map((r, i) => `<div class="rec"><b>${esc(r.values.site || "（現場名なし）")}</b>　<span class="muted">${fmt(r.created)}　${r.tpl === "free" ? "自由入力（" + (r.rows||[]).length + "行）" : r.tpl === "gs" ? "GSユアサ用" : "ZTE他用"}</span>
       <button class="btn danger" data-del="${recs.length - 1 - i}" style="float:right;padding:4px 10px;font-size:13px">削除</button></div>`).join("") : `<div class="muted">まだ記録がありません</div>`}</div>`;
-  $("#csvgs").onclick = () => csv("gs"); $("#csvzte").onclick = () => csv("zte");
+  $("#csvfree").onclick = csvFree; $("#csvgs").onclick = () => csv("gs"); $("#csvzte").onclick = () => csv("zte");
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
     if(b.dataset.c !== "1"){ b.dataset.c = "1"; b.textContent = "本当に削除"; return; }
     const all = ls.get("records", []); all.splice(+b.dataset.del, 1); ls.set("records", all); vRecords();
@@ -434,6 +447,143 @@ function csv(id){
   const rows = recs.map(r => [fmt(r.created), ...t.fields.map(f => r.values[f.id] ?? "")]);
   const text = "﻿" + [head, ...rows].map(a => a.map(q).join(",")).join("\r\n");
   const d = new Date(), name = `${id === "gs" ? "PPP_GSユアサ" : "PPP_ZTE他"}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.csv`;
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" })); a.download = name; a.click();
+}
+
+/* ========== 自由入力（決まった用紙なし） ========== */
+const ITEM_WORDS = /(絶縁|電流|電圧|抵抗|温度|気温|発電量|開放|短絡|日射|周波数|接地|累積|瞬時|稼働時間|風速)/;
+const UNIT_WORDS = [
+  [/(メガオーム|メガ|メグ|MΩ|ＭΩ)/i, "MΩ"], [/(キロワットアワー|キロワット時|kWh)/i, "kWh"], [/(キロワット|キロ|kW)/i, "kW"],
+  [/(ミリアンペア|mA)/, "mA"], [/(アンペア|A(?![a-z]))/, "A"], [/(ボルト|V(?![a-z]))/, "V"], [/(オーム|Ω)/, "Ω"],
+  [/(度|℃)/, "℃"], [/(時間|h(?![a-z]))/, "h"], [/(パーセント|％|%)/, "%"], [/(ヘルツ|Hz)/i, "Hz"]
+];
+const UNIT_READ2 = { ...UNIT_READ, "mA":"ミリアンペア", "V":"ボルト", "Ω":"オーム", "%":"パーセント", "Hz":"ヘルツ" };
+const NUMCH = "0-9０-９一二三四五六七八九十〇";
+const RE_PCS = new RegExp(`(パワコン|パワーコンディショナー?|PCS|ピーシーエス|インバーター?|パワコ)\\s*([${NUMCH}]+)\\s*(号機|台目|番|号)?`, "gi");
+const RE_SUB = new RegExp(`(DC|ディーシー|回路|ストリング|接続箱|集電箱|分岐|ブレーカー)\\s*([${NUMCH}]+)\\s*(番|回路目|番目)?`, "i");
+const toNum = x => { const n = parseNumber(x); return n === null ? x : String(+n); };
+
+function startFree(){
+  const d = ls.get("draft_free", null);
+  S.free = d || { site: "", inspector: S.opt.inspector || "", target: "", sub: "", item: "", units: {}, rows: [] };
+  S.active = true; keepAwake(); go("free");
+  speak(d && d.rows.length ? `続きから始めます。${d.rows.length}行あります。話してください` : "自由入力を始めます。現場名から話してください");
+}
+function persistFree(){ ls.set("draft_free", S.free); }
+function rowText(r){ return [r.target, r.sub, r.item].filter(Boolean).join(" ") + (r.value ? " " + r.value + (r.unit ? (UNIT_READ2[r.unit] || r.unit) : "") : ""); }
+function freeHandle(alts){
+  const raw = (alts[0] || "").trim(), n = norm(raw), F = S.free;
+  S.heard = raw;
+  if(!n){ listen(); return; }
+  if(RE_SAVE.test(n)) return saveFree();
+  if(RE_STOP.test(n)){ S.active = false; stopRec(); speak("止めました。再開ボタンで続けます"); return; }
+  if(RE_AGAIN.test(n)){ const r = F.rows[F.rows.length - 1]; return speak(r ? rowText(r) : "まだ記録がありません"); }
+  if(RE_BACK.test(n) || /^(取り消し|とりけし|今のなし|今の無し|消して|けして)$/.test(n)){
+    const r = F.rows.pop(); persistFree(); draw(true);
+    return speak(r ? rowText(r) + " を消しました" : "消す行がありません");
+  }
+  let m;
+  if((m = raw.match(/^(現場名|現場|発電所名?)\s*(は|が)?\s*(.+)$/))){ F.site = m[3].replace(/(です|でした)$/, "").trim(); persistFree(); draw(true); return speak("現場名 " + F.site); }
+  if((m = raw.match(/^(点検者|担当者?)\s*(は|が)?\s*(.+)$/))){ F.inspector = m[3].replace(/(です)$/, "").trim(); persistFree(); draw(true); return speak("点検者 " + F.inspector); }
+
+  /* パワコン番号ごとに区切って、順に処理する */
+  const segs = []; let last = 0, mm; RE_PCS.lastIndex = 0;
+  while((mm = RE_PCS.exec(raw))){ if(mm.index > last) segs.push({ text: raw.slice(last, mm.index) }); segs.push({ pcs: "パワコン" + toNum(mm[2]) }); last = RE_PCS.lastIndex; }
+  if(last < raw.length) segs.push({ text: raw.slice(last) });
+  const added = [], said = [];
+  for(const sg of segs){
+    if(sg.pcs){ F.target = sg.pcs; F.sub = ""; continue; }
+    let t = sg.text.replace(/^[\s、。,]+|[\s、。,]+$/g, ""); if(!norm(t)) continue;
+    const sm = t.match(RE_SUB); if(sm){ F.sub = sm[1].replace("ディーシー", "DC") + toNum(sm[2]); t = t.replace(sm[0], " "); }
+    /* 単位は「数字のすぐ後」か「最後」にあるものだけを見る（「温度」の「度」を単位と取り違えないため） */
+    let unit = "";
+    for(const [re, u] of UNIT_WORDS){
+      const near = new RegExp(`([0-9０-９.．${NUMCH}点]\\s*)` + re.source, re.flags.replace("g", ""));
+      const tail = new RegExp(re.source + "\\s*(です|でした)?\\s*$", re.flags.replace("g", ""));
+      if(near.test(t)){ unit = u; t = t.replace(near, "$1 "); break; }
+      if(tail.test(t) && !ITEM_WORDS.test(t.replace(tail, "").slice(-3) + t.match(tail)[0])){ unit = u; t = t.replace(tail, " "); break; }
+    }
+    const value = parseNumber(t);
+    let item = t;
+    if(value !== null){
+      item = item.replace(/[0-9０-９.．]+/g, " ").replace(/(マイナス|まいなす)/g, " ");
+      item = item.replace(new RegExp(`[${NUMCH}点]{1,}`, "g"), m => ITEM_WORDS.test(m) ? m : " ");
+    }
+    item = item.replace(/(は|が|の|を|で|です|でした|抵抗値|値)\s*$/g, "").replace(/^\s*(の|は)/, "").replace(/\s+/g, " ").trim();
+    if(item === "絶縁抵抗") item = "絶縁";
+    if(value === null){
+      if(item && item.length <= 8 && ITEM_WORDS.test(item)){ F.item = item; if(unit) F.units[item] = unit; said.push("項目 " + item); continue; }
+      const r = { target: F.target, sub: F.sub, item: "メモ", value: item || t.trim(), unit: "", heard: raw, time: nowLocal() };
+      F.rows.push(r); added.push(r); continue;
+    }
+    if(!item && unit && F.units[F.item] !== unit){
+      /* 項目を言わずに単位だけ言ったとき：その単位で最後に使った項目、なければ単位から決める */
+      const DEF = { "MΩ":"絶縁", "A":"電流", "mA":"電流", "V":"電圧", "℃":"温度", "kW":"瞬時発電量", "kWh":"累積発電量", "h":"稼働時間", "Ω":"抵抗" };
+      item = Object.keys(F.units).reverse().find(k => F.units[k] === unit) || DEF[unit] || "";
+    }
+    if(item) F.item = item; else item = F.item;
+    if(unit && item) F.units[item] = unit; else if(!unit) unit = F.units[item] || "";
+    const r = { target: F.target, sub: F.sub, item, value, unit, heard: raw, time: nowLocal() };
+    F.rows.push(r); added.push(r);
+  }
+  persistFree(); draw(true);
+  if(added.length) return speak(added.map(rowText).join("、"));
+  if(said.length) return speak(said.join("、"));
+  if(F.target || F.sub) return speak([F.target, F.sub].filter(Boolean).join(" "));
+  speak("聞き取れませんでした");
+}
+function saveFree(){
+  const F = S.free;
+  if(!F.rows.length && !F.site){ speak("まだ何も入っていません"); return; }
+  const recs = ls.get("records", []);
+  recs.push({ tpl: "free", values: { site: F.site, inspector: F.inspector }, rows: F.rows, created: new Date().toISOString() });
+  ls.set("records", recs);
+  const site = F.site ? F.site + " を" : "";
+  S.free = { site: "", inspector: S.opt.inspector || F.inspector || "", target: "", sub: "", item: "", units: {}, rows: [] };
+  persistFree(); draw(true);
+  speak(`${site}保存しました。次の現場を話してください`);
+}
+function vFree(){
+  $("#title").textContent = "自由入力";
+  $("#app").innerHTML = `
+    <div class="now" id="now"><div class="pos" id="pos"></div><div class="lab" id="lab"></div><div class="val" id="val" style="font-size:30px"></div>
+      <div class="heard" id="heard"></div><div class="st"><span class="dot" id="dot"></span><span id="stt"></span></div></div>
+    <div class="row" style="margin-bottom:12px"><button class="btn" id="bPause"></button><button class="btn" id="bUndo">最後の行を消す</button><button class="btn ok" id="bSave">保存</button></div>
+    <div class="card list" id="list"></div>`;
+  $("#bUndo").onclick = () => { S.active = true; freeHandle(["戻る"]); };
+  $("#bSave").onclick = () => { S.active = true; saveFree(); };
+  $("#bPause").onclick = () => {
+    if(S.active){ S.active = false; stopRec(); try{ speechSynthesis.cancel(); }catch(e){} S.speaking = false; draw(); }
+    else{ S.active = true; keepAwake(); speak("再開します"); }
+  };
+  draw(true);
+}
+function drawFree(full){
+  if(!$("#now")) return;
+  const F = S.free, r = F.rows[F.rows.length - 1];
+  $("#pos").textContent = `現場：${F.site || "（未入力）"}　点検者：${F.inspector || "—"}　${F.rows.length}行`;
+  $("#lab").textContent = "今：" + ([F.target, F.sub].filter(Boolean).join(" ") || "対象なし") + (F.item ? " ／ " + F.item : "");
+  const ve = $("#val"); ve.textContent = r ? [r.target, r.sub, r.item].filter(Boolean).join(" ") + "　" + r.value + (r.unit ? " " + r.unit : "") : "話してください"; ve.classList.toggle("empty", !r);
+  $("#heard").textContent = S.heard ? "聞き取り：" + S.heard : "";
+  $("#now").classList.toggle("listen", S.listening);
+  $("#dot").className = "dot" + (S.listening ? " l" : S.speaking ? " s" : "");
+  $("#stt").textContent = S.status || (!S.active ? "一時停止中" : S.speaking ? "読み上げ中…" : S.listening ? "聞いています。話してください" : "準備中…");
+  $("#bPause").textContent = S.active ? "⏸ 一時停止" : "▶ 再開";
+  if(full){
+    $("#list").innerHTML = F.rows.length ? F.rows.map((x, i) => `<div class="it ${i === F.rows.length - 1 ? "cur" : ""}"><span class="l">${esc([x.target, x.sub, x.item].filter(Boolean).join(" "))}</span><span class="v">${esc(x.value + (x.unit ? " " + x.unit : ""))}</span>
+      <button class="btn danger" data-rd="${i}" style="padding:2px 8px;font-size:12px;flex:none">消す</button></div>`).join("") : `<div class="muted">まだ行がありません</div>`;
+    document.querySelectorAll("[data-rd]").forEach(b => b.onclick = () => { F.rows.splice(+b.dataset.rd, 1); persistFree(); draw(true); });
+    const c = document.querySelector(".it.cur"); if(c) c.scrollIntoView({ block: "center" });
+  }
+}
+function csvFree(){
+  const recs = ls.get("records", []).filter(r => r.tpl === "free");
+  if(!recs.length){ alert("自由入力の記録はまだありません"); return; }
+  const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
+  const head = ["記録日時", "現場名", "点検者", "対象", "回路など", "項目", "値", "単位", "入力時刻", "聞き取った言葉"];
+  const rows = []; recs.forEach(r => (r.rows || []).forEach(x => rows.push([fmt(r.created), r.values.site, r.values.inspector, x.target, x.sub, x.item, x.value, x.unit, x.time.replace("T", " "), x.heard])));
+  const text = "﻿" + [head, ...rows].map(a => a.map(q).join(",")).join("\r\n");
+  const d = new Date(), name = `自由入力_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.csv`;
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" })); a.download = name; a.click();
 }
 
