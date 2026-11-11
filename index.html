@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>話して記録 ハンズフリー</title>
+<style>
+:root{--bg:#f4f6fa;--ink:#141a2b;--sub:#5b6478;--line:#e2e6ee;--pri:#2f6fe4;--pri2:#e8f0ff;--ok:#24a148;--red:#d93838}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;background:var(--bg);color:var(--ink);font-size:16px}
+header{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:10px 12px}
+header h1{font-size:17px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header button{border:0;background:none;font-size:22px;padding:4px 8px}
+main{max-width:760px;margin:0 auto;padding:12px 12px 40px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:10px;padding:12px 14px;font-size:16px;font-weight:700;white-space:nowrap}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:#fff}
+.btn.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+.btn.big{width:100%;padding:16px;font-size:18px}
+.btn.danger{color:var(--red);border-color:#f3c9c9}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>.btn{flex:1}
+.muted{color:var(--sub);font-size:13px}
+.now{background:#fff;border:3px solid var(--pri);border-radius:16px;padding:14px 16px;margin-bottom:12px;position:sticky;top:50px;z-index:4;box-shadow:0 4px 14px rgba(0,0,0,.08)}
+.now.listen{border-color:var(--red)}
+.now .pos{font-size:13px;color:var(--sub)}
+.now .lab{font-size:28px;font-weight:800;margin:4px 0}
+.now .val{font-size:40px;font-weight:800;color:var(--pri);min-height:52px;word-break:break-all}
+.now .val.empty{color:#c3c9d6}
+.now .heard{font-size:14px;color:var(--sub);margin-top:6px;min-height:20px}
+.st{display:flex;align-items:center;gap:8px;font-weight:700;margin-top:8px}
+.dot{width:14px;height:14px;border-radius:50%;background:#c3c9d6}
+.dot.l{background:var(--red);animation:p 1s infinite}.dot.s{background:var(--pri);animation:p 1s infinite}
+@keyframes p{50%{opacity:.3}}
+.list .it{display:flex;gap:8px;padding:7px 4px;border-bottom:1px solid var(--line);font-size:14px}
+.list .it.cur{background:var(--pri2);font-weight:800;border-radius:6px}
+.list .it .l{flex:1}.list .it .v{text-align:right}
+.list .g{font-weight:800;margin:12px 0 4px;color:var(--pri)}
+.help{font-size:14px;line-height:1.8}
+.help code{background:#f1f3f8;border-radius:4px;padding:1px 6px;font-family:inherit;font-weight:700}
+select,input[type=range]{font-size:16px}
+select{padding:8px;border:1px solid var(--line);border-radius:8px;width:100%}
+.rec{border-bottom:1px solid var(--line);padding:9px 0;font-size:14px}
+.warn{background:#fff4e5;border:1px solid #f5c88a;border-radius:10px;padding:10px;font-size:14px}
+</style>
+</head>
+<body>
+<header><button id="back" style="display:none">‹</button><h1 id="title">話して記録 ハンズフリー</h1></header>
+<main id="app"></main>
+<script>
+/* ========== 帳票（PPP点検用紙 2種） ========== */
+function pppTemplate(kind){
+  const F = []; const add = (id, label, type, ex = {}) => F.push({ id, label, type, options: [], unit: "", ...ex });
+  const W = ["晴れ","曇り","雨","雪"], ST = ["正常","再起動で正常に復帰","故障停止復帰せず"];
+  const isGS = kind === "gs", N = isGS ? 5 : 8, G0 = "基本情報";
+  if(isGS){
+    add("date","点検日","date",{auto:true,group:G0});
+    add("inspector","点検者","text",{group:G0});
+    add("weather","天候","select",{options:W,group:G0});
+    add("temp","気温","number",{unit:"℃",group:G0});
+    add("site","現場名","text",{group:G0});
+    add("pcs_model","PCS機種","text",{def:"GSユアサ",group:G0});
+    add("monitor_model","監視装置機種","text",{group:G0});
+  }else{
+    add("date","点検日時","datetime",{auto:true,group:G0});
+    add("inspector","点検者","text",{group:G0});
+    add("weather","天候","select",{options:W,group:G0});
+    add("temp","気温","number",{unit:"℃",group:G0});
+    add("site","現場名","text",{group:G0});
+    add("pcs_maker","PCSメーカー","select",{options:["ZTE","オムロン","IDEC","サンヨー"],group:G0});
+  }
+  add("pcs_count","PCS台数","select",{options:Array.from({length:N},(_, i) => String(i+1)),group:G0});
+  for(let n = 1; n <= N; n++){
+    const g = "PCS" + n, sh = { group: g, pcs: n };
+    add(`p${n}_kw`, `PCS${n} 瞬時発電量`, "number", {...sh, unit:"kW"});
+    add(`p${n}_kwh`, `PCS${n} 累積発電量`, "number", {...sh, unit:"kWh"});
+    if(isGS){
+      add(`p${n}_run_h`, `PCS${n} PCSの稼働時間`, "number", {...sh, unit:"h"});
+      add(`p${n}_fan_h`, `PCS${n} ファンの稼働時間`, "number", {...sh, unit:"h"});
+      add(`p${n}_disp`, `PCS${n} 表示`, "text", sh);
+      add(`p${n}_fault`, `PCS${n} 故障履歴`, "text", sh);
+      add(`p${n}_fan`, `PCS${n} ファンの状態`, "select", {...sh, options:["良","停止","交換済み","今回交換"]});
+      add(`p${n}_fan_ws`, `PCS${n} ファンの風速`, "number", sh);
+    }else{
+      add(`p${n}_vrise`, `PCS${n} 電圧上昇抑制時間`, "number", sh);
+      add(`p${n}_err`, `PCS${n} エラー履歴`, "text", sh);
+      add(`p${n}_status`, `PCS${n} PCSステータス`, "text", sh);
+    }
+    for(let d = 1; d <= 6; d++){
+      add(`p${n}_dc${d}_a`, `PCS${n} DC${d} 電流`, "number", {...sh, unit:"A"});
+      add(`p${n}_dc${d}_mo`, `PCS${n} DC${d} 絶縁抵抗`, "number", {...sh, unit:"MΩ"});
+    }
+  }
+  const G2 = "通信・監視";
+  add("out_ctrl","出力制御機器","select",{options:isGS?["有り","無"]:["有り","無し"],group:G2});
+  add("router","ルーター","select",{options:isGS?["有り","無"]:["有り","無し"],group:G2});
+  add("router_st","ルーターのステータス","select",{options:ST,group:G2});
+  if(!isGS){
+    add("monitor","監視装置","text",{group:G2});
+    for(let b = 1; b <= 4; b++) add(`box${b}`, `収納箱${b}`, "text", {group:G2});
+  }
+  add("note","備考","text",{group:"備考"});
+  return { id: isGS ? "gs" : "zte", title: isGS ? "PPP案件 GSユアサ点検用紙" : "PPP案件点検用紙（ZTE・オムロン・IDEC・サンヨー）", fields: F };
+}
+const TPL = { gs: pppTemplate("gs"), zte: pppTemplate("zte") };
+
+/* ========== 基本 ========== */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pad = n => String(n).padStart(2, "0");
+const nowLocal = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const fmt = iso => { const d = new Date(iso); return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const ls = { get(k, d){ try{ return JSON.parse(localStorage.getItem("hk_" + k)) ?? d; }catch(e){ return d; } }, set(k, v){ try{ localStorage.setItem("hk_" + k, JSON.stringify(v)); }catch(e){} } };
+const UNIT_READ = { "A":"アンペア", "MΩ":"メガオーム", "kW":"キロワット", "kWh":"キロワットアワー", "h":"時間", "℃":"度" };
+
+const S = {
+  view: "home", tpl: null, values: {}, cur: 0, setHere: false,
+  active: false, speaking: false, listening: false, heard: "", status: "",
+  opt: ls.get("opt", { rate: 1.1, autoNext: false, readBack: true })
+};
+
+/* ========== 読み上げ ========== */
+let jaVoice = null;
+function pickVoice(){ const v = speechSynthesis.getVoices(); jaVoice = v.find(x => /ja[-_]JP/i.test(x.lang)) || v.find(x => /^ja/i.test(x.lang)) || null; }
+if("speechSynthesis" in window){ pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+let speakSeq = 0;
+function speak(text){
+  return new Promise(resolve => {
+    const my = ++speakSeq; let guard = null, ended = false;
+    stopRec(); S.speaking = true; draw();
+    const done = () => { if(ended || my !== speakSeq) return; ended = true; clearTimeout(guard); S.speaking = false; draw(); resolve(); if(S.active) setTimeout(listen, 150); };
+    if(!("speechSynthesis" in window)){ setTimeout(done, 300); return; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "ja-JP"; u.rate = S.opt.rate; if(jaVoice) u.voice = jaVoice;
+    u.onend = done; u.onerror = done;
+    /* 読み上げ終わりの合図が来ない端末があるので、長さから見積もった時間で打ち切る */
+    guard = setTimeout(done, 1500 + text.length * 260 / S.opt.rate);
+    speechSynthesis.speak(u);
+  });
+}
+
+/* ========== 聞き取り ========== */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, gotResult = false;
+function listen(){
+  if(!S.active || S.speaking || !SR) return;
+  stopRec();
+  rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 3;
+  gotResult = false;
+  rec.onstart = () => { S.listening = true; draw(); };
+  rec.onresult = e => {
+    const r = e.results[e.results.length - 1];
+    S.heard = r[0].transcript; draw();
+    if(r.isFinal){ gotResult = true; const alts = [...r].map(a => a.transcript); stopRec(); handle(alts); }
+  };
+  rec.onerror = e => {
+    if(e.error === "not-allowed" || e.error === "service-not-allowed"){ S.active = false; S.status = "マイクが許可されていません。Chromeの設定でマイクを許可してください"; draw(); }
+  };
+  rec.onend = () => { S.listening = false; draw(); if(S.active && !S.speaking && !gotResult) setTimeout(listen, 200); };
+  try{ rec.start(); }catch(e){ setTimeout(listen, 500); }
+}
+function stopRec(){ if(rec){ const r = rec; rec = null; r.onend = null; r.onresult = null; try{ r.abort(); }catch(e){} } S.listening = false; }
+
+/* ========== 項目の並び（PCS台数で絞る） ========== */
+function askable(){
+  const n = +S.values.pcs_count || 99;
+  return S.tpl.fields.filter(f => !f.auto && (!f.pcs || f.pcs <= n));
+}
+const curField = () => askable()[S.cur];
+function readLabel(f){ return f.label.replace(/PCS(\d)/g, "PCS $1 ").replace(/DC(\d)/g, "DC $1 "); }
+function readValue(f, v){ return v + (f.unit ? (UNIT_READ[f.unit] || f.unit) : ""); }
+function ask(prefix = ""){
+  const f = curField(); if(!f) return;
+  const v = S.values[f.id];
+  let t = prefix + readLabel(f);
+  if(v) t += "。今は " + readValue(f, v);
+  else if(f.type === "select" && f.id !== "pcs_count") t += "。" + f.options.join("、");
+  S.setHere = false; S.heard = ""; draw(true);
+  speak(t);
+}
+function move(step){
+  const list = askable();
+  const j = S.cur + step;
+  if(j >= list.length){ S.cur = list.length - 1; draw(true); speak("最後の項目です。保存と言うと保存します"); return; }
+  if(j < 0){ S.cur = 0; ask("最初の項目です。"); return; }
+  S.cur = j; ask();
+}
+
+/* ========== 話した言葉の処理 ========== */
+const norm = s => s.replace(/[\s、。,.!！?？]/g, "").replace(/[Ａ-Ｚａ-ｚ０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+const RE_NEXT = /(次へ|つぎへ|次に|次|つぎ|ネクスト|スキップ|飛ばす|とばす|飛ばして)$/;
+const RE_BACK = /^(戻る|もどる|戻って|もどって|戻れ|もどれ|バック|戻ります|戻して)$/;
+const RE_AGAIN = /^(もう一度|もういちど|もう1度|繰り返し|くりかえし|繰り返して|今どこ|いまどこ|どこ)$/;
+const RE_SAVE = /^(保存|ほぞん|保存して|保存する|保存します|保存お願いします)$/;
+const RE_STOP = /^(終了|しゅうりょう|ストップ|止めて|とめて|一時停止|休憩)$/;
+const RE_CLEAR = /^(消して|けして|消去|クリア|空欄|なしにして)$/;
+
+function handle(alts){
+  const raw = alts[0] || "", n = norm(raw);
+  S.heard = raw;
+  if(!n){ listen(); return; }
+  if(RE_SAVE.test(n)) return save();
+  if(RE_STOP.test(n)){ S.active = false; stopRec(); speak("止めました。再開ボタンで続けます"); return; }
+  if(RE_AGAIN.test(n)) return ask();
+  if(RE_BACK.test(n)){
+    const f = curField();
+    if(S.setHere && f){ S.values[f.id] = ""; persist(); return ask("入れ直します。"); }
+    return move(-1);
+  }
+  if(RE_CLEAR.test(n)){ const f = curField(); S.values[f.id] = ""; persist(); draw(); return speak("消しました"); }
+  let goNext = false, body = raw;
+  if(RE_NEXT.test(n)){
+    goNext = true;
+    body = raw.replace(/[\s、。]*(次へ|つぎへ|次に|次|つぎ|ネクスト|スキップ|飛ばす|とばす|飛ばして)[\s、。]*$/, "");
+    if(!norm(body)) return move(1);
+  }
+  const f = curField();
+  let v = null;
+  for(const a of (goNext ? [body] : alts)){ v = parseValue(f, a); if(v !== null) break; }
+  if(v === null){
+    const hint = f.type === "number" ? "数字で言ってください。" : f.type === "select" ? f.options.join("、") + " のどれかを言ってください。" : "";
+    speak("聞き取れませんでした。" + hint + readLabel(f)); return;
+  }
+  S.values[f.id] = v; S.setHere = true; persist(); draw(true);
+  if(f.id === "pcs_count"){ speak(`PCS ${v}台。`).then(() => move(1)); return; }
+  if(goNext || S.opt.autoNext){ if(S.opt.readBack) speak(readValue(f, v)).then(() => move(1)); else move(1); return; }
+  speak(S.opt.readBack ? readValue(f, v) : "はい");
+}
+
+/* 数字の読み取り（漢数字・「てん」にも対応） */
+function kanjiNum(s){
+  const D = {"〇":0,"零":0,"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9};
+  return s.replace(/[〇零一二三四五六七八九十百千万点]+/g, m => {
+    const [ip, fp] = m.split("点");
+    let total = 0, sec = 0, num = 0, plain = "";
+    if(/^[〇零一二三四五六七八九]+$/.test(ip || "")) plain = [...ip].map(c => D[c]).join("");
+    else{
+      for(const c of ip || ""){
+        if(c in D) num = D[c];
+        else if(c === "十" || c === "百" || c === "千"){ sec += (num || 1) * {"十":10,"百":100,"千":1000}[c]; num = 0; }
+        else if(c === "万"){ total += (sec + num || 1) * 10000; sec = 0; num = 0; }
+      }
+      plain = String(total + sec + num);
+    }
+    if(fp !== undefined) plain += "." + [...fp].map(c => D[c] ?? "").join("");
+    return plain;
+  });
+}
+/* ひらがな・カタカナの数の読み（はってんいち 等）を漢数字に */
+function yomiToKanji(s){
+  s = s.replace(/[ァ-ン]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+  const map = [["きゅう","九"],["じゅう","十"],["じゅっ","十"],["ひゃく","百"],["びゃく","百"],["ぴゃく","百"],["せん","千"],["ぜん","千"],["まん","万"],
+    ["なな","七"],["しち","七"],["はち","八"],["はっ","八"],["ろく","六"],["ろっ","六"],["よん","四"],["さん","三"],["いち","一"],["いっ","一"],
+    ["ぜろ","〇"],["れい","〇"],["まる","〇"],["てん","点"],["ご","五"],["に","二"]];
+  if(!/^[ぁ-ん〇-龥0-9.\s点]*$/.test(s) && !/[ぁ-ん]{2,}/.test(s)) return s;
+  for(const [k, v] of map) s = s.split(k).join(v);
+  return s;
+}
+function parseNumber(t){
+  let s = t.replace(/[０-９．]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/,/g, "");
+  s = s.replace(/(\d)\s*万\s*(\d{1,4})(?!\d)/g, (m, a, b) => String(+a * 10000 + +b)).replace(/(\d+(?:\.\d+)?)\s*万/g, (m, a) => String(+a * 10000));
+  s = yomiToKanji(s);
+  s = kanjiNum(s);
+  s = s.replace(/(\d)\s*(てん|テン|点)\s*(\d)/g, "$1.$3").replace(/^(れい|ゼロ|零)\s*(てん|テン|点)\s*(\d)/, "0.$3");
+  s = s.replace(/(マイナス|まいなす)\s*(\d)/, "-$2");
+  const m = s.match(/-?\d+(\.\d+)?/);
+  return m ? m[0] : null;
+}
+const SYN = {
+  "晴れ":["晴","はれ","ハレ"], "曇り":["曇","くもり","クモリ"], "雨":["雨","あめ"], "雪":["雪","ゆき"],
+  "正常":["正常","せいじょう","OK","オッケー","オーケー","異常なし","大丈夫","問題なし"],
+  "再起動で正常に復帰":["再起動","さいきどう"], "故障停止復帰せず":["故障","復帰せず","復帰しない","ダメ"],
+  "良":["良","よし","いい","良い","よい","OK","オッケー","オーケー","正常"], "停止":["停止","止まって","とまって","ていし"],
+  "交換済み":["交換済","交換ずみ","済み"], "今回交換":["今回","こんかい"],
+  "有り":["有","あり","ある","アリ"], "無":["無","なし","ない","ナシ"], "無し":["無","なし","ない","ナシ"],
+  "ZTE":["ZTE","ゼットティーイー","ZT"], "オムロン":["オムロン","おむろん"], "IDEC":["IDEC","アイデック","あいでっく"], "サンヨー":["サンヨー","三洋","さんよう","サンヨウ"]
+};
+function parseValue(f, t){
+  const n = norm(t); if(!n) return null;
+  if(f.type === "number") return parseNumber(t);
+  if(f.type === "select"){
+    if(f.id === "pcs_count"){ const x = parseNumber(t); return x && f.options.includes(String(+x)) ? String(+x) : null; }
+    const N = n.toUpperCase();
+    if(f.options.includes("無") || f.options.includes("無し")){ if(/(なし|無し|ない|無い)/.test(n)) return f.options.find(o => o.startsWith("無")); }
+    for(const o of f.options){ if(N.includes(o.toUpperCase())) return o; }
+    for(const o of f.options){ if((SYN[o] || []).some(k => N.includes(k.toUpperCase()))) return o; }
+    return null;
+  }
+  return t.trim().replace(/(です|でした)$/, "");
+}
+
+/* ========== 保存・記録 ========== */
+function fresh(){
+  const v = {}, n = nowLocal();
+  S.tpl.fields.forEach(f => { if(f.auto) v[f.id] = f.type === "date" ? n.slice(0,10) : n; else if(f.def) v[f.id] = f.def; });
+  if(S.opt.inspector) v.inspector = S.opt.inspector;
+  return v;
+}
+function persist(){ ls.set("draft_" + S.tpl.id, { values: S.values, cur: S.cur }); }
+function save(){
+  const filled = S.tpl.fields.some(f => !f.auto && !f.def && f.id !== "inspector" && S.values[f.id]);
+  if(!filled){ speak("まだ何も入っていません。" + readLabel(curField())); return; }
+  const recs = ls.get("records", []);
+  recs.push({ tpl: S.tpl.id, values: { ...S.values }, created: new Date().toISOString() });
+  ls.set("records", recs);
+  const site = S.values.site ? S.values.site + " を" : "";
+  S.values = fresh(); S.cur = 0; persist();
+  ask(`${site}保存しました。次の記録を始めます。`);
+}
+
+/* ========== 画面スリープ防止 ========== */
+let wake = null;
+async function keepAwake(){ try{ if("wakeLock" in navigator && !wake){ wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => wake = null); } }catch(e){} }
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "visible" && S.active){ keepAwake(); if(!S.speaking) listen(); }
+});
+
+/* ========== 画面 ========== */
+$("#back").onclick = () => { S.active = false; stopRec(); try{ speechSynthesis.cancel(); }catch(e){} go("home"); };
+function go(v){ S.view = v; render(); scrollTo(0,0); }
+function render(){ $("#back").style.display = S.view === "home" ? "none" : ""; ({home: vHome, run: vRun, records: vRecords})[S.view](); }
+
+function vHome(){
+  $("#title").textContent = "話して記録 ハンズフリー";
+  const ok = SR && "speechSynthesis" in window;
+  $("#app").innerHTML = `
+    ${ok ? "" : `<div class="warn">このブラウザでは音声の聞き取り・読み上げが使えません。AndroidのChromeで開いてください。</div>`}
+    <div class="card">
+      <b>帳票を選ぶ</b>
+      <select id="tp" style="margin-top:8px">${Object.values(TPL).map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("")}</select>
+      <button class="btn pri big" id="start" style="margin-top:10px">▶ 開始（読み上げて聞き取ります）</button>
+      <div class="muted" style="margin-top:6px">途中で閉じても、入れた内容は残っていて続きから始まります。</div>
+    </div>
+    <div class="card help">
+      <b>使い方</b><br>
+      アプリが「<b>PCS 1 DC 1 電流</b>」のように項目名を読み上げます。続けて値を話してください。<br>
+      <code>8.1</code> … その項目に入って、「8.1アンペア」と読み返します<br>
+      <code>次へ</code> … 次の項目へ進みます（<code>8.1 次へ</code> と続けて言ってもOK）<br>
+      <code>戻る</code> … 今入れた値を消して入れ直します。もう一度言うと前の項目に戻ります<br>
+      <code>もう一度</code> … 今の項目名を読み直します<br>
+      <code>消して</code> … 今の項目を空にします<br>
+      <code>保存</code> … 保存して、次の記録を最初から始めます<br>
+      <code>ストップ</code> … 一時停止します<br><br>
+      ・最初に「PCS台数」を言うと、使わないPCSの項目は飛ばします<br>
+      ・読み上げの声をマイクが拾わないように、<b>Bluetoothイヤホン</b>を使うのがおすすめです<br>
+      ・作業中は画面を消さないでください（画面が消えると聞き取りが止まります。このアプリは開いている間、画面が消えないようにしています）
+    </div>
+    <div class="card">
+      <b>設定</b>
+      <div style="margin-top:8px">点検者の名前（毎回最初から入れておく）
+        <input id="insp" value="${esc(S.opt.inspector||"")}" style="width:100%;font-size:16px;padding:8px;border:1px solid var(--line);border-radius:8px;margin-top:4px"></div>
+      <div style="margin-top:8px">読み上げの速さ：<span id="rv">${S.opt.rate}</span>
+        <input type="range" id="rate" min="0.7" max="1.6" step="0.1" value="${S.opt.rate}" style="width:100%"></div>
+      <label class="row" style="margin-top:8px"><input type="checkbox" id="an" ${S.opt.autoNext?"checked":""}> 値を言ったら自動で次へ進む</label>
+      <label class="row" style="margin-top:8px"><input type="checkbox" id="rb" ${S.opt.readBack?"checked":""}> 入れた値を読み返す</label>
+    </div>
+    <button class="btn big" id="recs">記録一覧・CSVで出す</button>`;
+  $("#rate").oninput = e => { S.opt.rate = +e.target.value; $("#rv").textContent = S.opt.rate; ls.set("opt", S.opt); };
+  $("#insp").oninput = e => { S.opt.inspector = e.target.value.trim(); ls.set("opt", S.opt); };
+  $("#an").onchange = e => { S.opt.autoNext = e.target.checked; ls.set("opt", S.opt); };
+  $("#rb").onchange = e => { S.opt.readBack = e.target.checked; ls.set("opt", S.opt); };
+  $("#recs").onclick = () => go("records");
+  $("#start").onclick = () => {
+    S.tpl = TPL[$("#tp").value];
+    const d = ls.get("draft_" + S.tpl.id, null);
+    S.values = d ? d.values : fresh(); S.cur = d ? Math.min(d.cur, askable().length - 1) : 0;
+    S.active = true; keepAwake(); go("run");
+    ask(d && Object.keys(d.values).length > 2 ? "続きから始めます。" : "始めます。");
+  };
+}
+
+function vRun(){
+  $("#title").textContent = S.tpl.title;
+  $("#app").innerHTML = `
+    <div class="now" id="now"><div class="pos" id="pos"></div><div class="lab" id="lab"></div><div class="val" id="val"></div>
+      <div class="heard" id="heard"></div><div class="st"><span class="dot" id="dot"></span><span id="stt"></span></div></div>
+    <div class="row" style="margin-bottom:8px"><button class="btn" id="bBack">◀ 戻る</button><button class="btn" id="bAgain">もう一度</button><button class="btn pri" id="bNext">次へ ▶</button></div>
+    <div class="row" style="margin-bottom:12px"><button class="btn" id="bPause"></button><button class="btn ok" id="bSave">保存</button></div>
+    <div class="card list" id="list"></div>`;
+  $("#bBack").onclick = () => { S.active = true; handle(["戻る"]); };
+  $("#bAgain").onclick = () => { S.active = true; ask(); };
+  $("#bNext").onclick = () => { S.active = true; move(1); };
+  $("#bSave").onclick = () => { S.active = true; save(); };
+  $("#bPause").onclick = () => {
+    if(S.active){ S.active = false; stopRec(); try{ speechSynthesis.cancel(); }catch(e){} S.speaking = false; draw(); }
+    else{ S.active = true; keepAwake(); ask("再開します。"); }
+  };
+  draw(true);
+}
+function draw(full){
+  if(S.view !== "run" || !$("#now")) return;
+  const list = askable(), f = list[S.cur]; if(!f) return;
+  const v = S.values[f.id];
+  $("#pos").textContent = `${S.cur + 1} / ${list.length}　${f.group || ""}`;
+  $("#lab").textContent = f.label;
+  const ve = $("#val"); ve.textContent = v ? v + (f.unit ? " " + f.unit : "") : "未入力"; ve.classList.toggle("empty", !v);
+  $("#heard").textContent = S.heard ? "聞き取り：" + S.heard : "";
+  $("#now").classList.toggle("listen", S.listening);
+  $("#dot").className = "dot" + (S.listening ? " l" : S.speaking ? " s" : "");
+  $("#stt").textContent = S.status || (!S.active ? "一時停止中" : S.speaking ? "読み上げ中…" : S.listening ? "聞いています。話してください" : "準備中…");
+  $("#bPause").textContent = S.active ? "⏸ 一時停止" : "▶ 再開";
+  if(full){
+    let html = "", g = null;
+    list.forEach((x, i) => {
+      if(x.group !== g){ g = x.group; html += `<div class="g">${esc(g)}</div>`; }
+      const xv = S.values[x.id];
+      html += `<div class="it ${i === S.cur ? "cur" : ""}" data-i="${i}"><span class="l">${esc(x.label)}</span><span class="v">${xv ? esc(xv + (x.unit ? " " + x.unit : "")) : "—"}</span></div>`;
+    });
+    $("#list").innerHTML = html;
+    document.querySelectorAll(".it").forEach(el => el.onclick = () => { S.cur = +el.dataset.i; S.active = true; ask(); });
+    const c = document.querySelector(".it.cur"); if(c) c.scrollIntoView({ block: "center" });
+  }
+}
+
+function vRecords(){
+  $("#title").textContent = "記録一覧";
+  const recs = ls.get("records", []).slice().reverse();
+  $("#app").innerHTML = `
+    <div class="row" style="margin-bottom:10px"><button class="btn pri" id="csvgs">CSV：GSユアサ用</button><button class="btn pri" id="csvzte">CSV：ZTE他用</button></div>
+    <div class="card">${recs.length ? recs.map((r, i) => `<div class="rec"><b>${esc(r.values.site || "（現場名なし）")}</b>　<span class="muted">${fmt(r.created)}　${r.tpl === "gs" ? "GSユアサ用" : "ZTE他用"}</span>
+      <button class="btn danger" data-del="${recs.length - 1 - i}" style="float:right;padding:4px 10px;font-size:13px">削除</button></div>`).join("") : `<div class="muted">まだ記録がありません</div>`}</div>`;
+  $("#csvgs").onclick = () => csv("gs"); $("#csvzte").onclick = () => csv("zte");
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
+    if(b.dataset.c !== "1"){ b.dataset.c = "1"; b.textContent = "本当に削除"; return; }
+    const all = ls.get("records", []); all.splice(+b.dataset.del, 1); ls.set("records", all); vRecords();
+  });
+}
+function csv(id){
+  const t = TPL[id], recs = ls.get("records", []).filter(r => r.tpl === id);
+  if(!recs.length){ alert("この帳票の記録はまだありません"); return; }
+  const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
+  const head = ["記録日時", ...t.fields.map(f => f.label + (f.unit ? `（${f.unit}）` : ""))];
+  const rows = recs.map(r => [fmt(r.created), ...t.fields.map(f => r.values[f.id] ?? "")]);
+  const text = "﻿" + [head, ...rows].map(a => a.map(q).join(",")).join("\r\n");
+  const d = new Date(), name = `${id === "gs" ? "PPP_GSユアサ" : "PPP_ZTE他"}_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.csv`;
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" })); a.download = name; a.click();
+}
+
+render();
+</script>
+</body>
+</html>
